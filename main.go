@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	human "github.com/dustin/go-humanize"
@@ -19,6 +20,9 @@ type Config struct {
 	ExcludeFSPath   []string
 	Warning         float64
 	Critical        float64
+	NormalGiB       float64
+	Magic           float64
+	MinimumGiB      float64
 	IncludePseudo   bool
 	IncludeReadOnly bool
 	FailOnError     bool
@@ -88,6 +92,35 @@ var (
 			Default:   float64(95),
 			Usage:     "Critical threshold for file system usage",
 			Value:     &plugin.Critical,
+		},
+		{
+			Path:      "normal",
+			Env:       "",
+			Argument:  "normal",
+			Shorthand: "n",
+			Default:   float64(20),
+			Usage: `Value in GiB. Levels are not adapted for filesystems of exactly this ` +
+				`size, where levels are reduced for smaller filesystems and raised ` +
+				`for larger filesystems.`,
+			Value: &plugin.NormalGiB,
+		},
+		{
+			Path:      "magic",
+			Env:       "",
+			Argument:  "magic",
+			Shorthand: "m",
+			Default:   float64(1),
+			Usage:     `Magic factor to adjust warn/crit thresholds. Example: .9`,
+			Value:     &plugin.Magic,
+		},
+		{
+			Path:      "minimum",
+			Env:       "",
+			Argument:  "minimum",
+			Shorthand: "l",
+			Default:   float64(100),
+			Usage:     `Minimum size to adjust (in GiB)`,
+			Value:     &plugin.MinimumGiB,
 		},
 		{
 			Path:      "include-pseudo-fs",
@@ -190,11 +223,19 @@ func executeCheck(event *types.Event) (int, error) {
 		}
 
 		// implement magic factor for larger file systems?
+		tot := float64(s.Total)
+		bcrit := plugin.Critical
+		bwarn := plugin.Warning
+		if tot > (plugin.MinimumGiB * math.Pow(1024, 3)) {
+			bcrit = adjPercent(tot, plugin.Critical)
+			bwarn = adjPercent(tot, plugin.Warning)
+		}
+
 		fmt.Printf("%s ", plugin.PluginConfig.Name)
-		if s.UsedPercent >= plugin.Critical {
+		if s.UsedPercent >= bcrit {
 			criticals++
 			fmt.Printf("CRITICAL: ")
-		} else if s.UsedPercent >= plugin.Warning {
+		} else if s.UsedPercent >= bwarn {
 			warnings++
 			fmt.Printf(" WARNING: ")
 		} else {
@@ -261,4 +302,11 @@ func contains(a []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func adjPercent(sizeInBytes float64, percent float64) float64 {
+	hsize := (sizeInBytes / math.Pow(1024.0, 3)) / plugin.NormalGiB
+	felt := math.Pow(hsize, plugin.Magic)
+	scale := felt / hsize
+	return 100.0 - ((100.0 - percent) * scale)
 }
